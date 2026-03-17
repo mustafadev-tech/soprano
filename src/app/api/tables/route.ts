@@ -14,7 +14,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request): Promise<Response> {
-  return runRoute(request, { params: {} }, async () => {
+  return runRoute(request, { params: Promise.resolve({}) }, async () => {
     const { supabase } = await requireProfile();
     const tables = await listTablesWithOpenOrders(supabase);
     return apiSuccess(tables);
@@ -22,7 +22,7 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  return runRoute(request, { params: {} }, async (incomingRequest) => {
+  return runRoute(request, { params: Promise.resolve({}) }, async (incomingRequest) => {
     const { supabase } = await requireProfile();
     const body = await readJsonObject(incomingRequest);
     const name = parseNonEmptyString(body.name, 'name');

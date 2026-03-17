@@ -13,12 +13,12 @@ export class ApiRouteError extends Error {
 }
 
 export interface RouteContext<TParams = Record<string, string>> {
-  params: TParams;
+  params: Promise<TParams>;
 }
 
 export type RouteHandler<TParams = Record<string, string>> = (
   request: Request,
-  context: RouteContext<TParams>,
+  context: { params: TParams },
 ) => Promise<Response>;
 
 export function apiSuccess<T>(data: T, status = 200): Response {
@@ -71,7 +71,8 @@ export async function runRoute<TParams = Record<string, string>>(
   handler: RouteHandler<TParams>,
 ): Promise<Response> {
   try {
-    return await handler(request, context);
+    const params = await context.params;
+    return await handler(request, { params });
   } catch (error) {
     if (error instanceof ApiRouteError) {
       return apiFailure(error.status, error.message);

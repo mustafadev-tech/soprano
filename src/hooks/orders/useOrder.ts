@@ -185,7 +185,7 @@ function buildOrderState(
   orderId: string,
   serverOrder: UiOrder | null,
   currentState: OrderStoreEntry,
-  overrides?: Partial<Omit<OrderStoreEntry, 'order' | 'dirty'>>,
+  overrides?: Partial<Omit<OrderStoreEntry, 'order'>>,
 ): OrderStoreEntry {
   const mergedOrder = mergeServerOrderWithDraft(orderId, serverOrder);
 
@@ -291,17 +291,19 @@ function applyRealtimeOrderItemUpdate(
   currentOrder: UiOrder,
   payload: RealtimePostgresChangesPayload<OrderItemRealtimeRow>,
 ): UiOrder | 'refetch' {
-  const itemId = toNullableString(payload.new.id);
+  const newRow = payload.new as OrderItemRealtimeRow;
+  const oldRow = payload.old as Partial<OrderItemRealtimeRow>;
+  const itemId = toNullableString(newRow.id);
 
   if (!itemId) {
     return 'refetch';
   }
 
-  const newKey = payload.new.menu_item_id
-    ? createOrderItemKey(payload.new.menu_item_id, payload.new.note)
+  const newKey = newRow.menu_item_id
+    ? createOrderItemKey(newRow.menu_item_id, newRow.note)
     : null;
-  const oldKey = payload.old.menu_item_id
-    ? createOrderItemKey(payload.old.menu_item_id, payload.old.note)
+  const oldKey = oldRow.menu_item_id
+    ? createOrderItemKey(oldRow.menu_item_id, oldRow.note)
     : null;
 
   if (newKey && oldKey && newKey !== oldKey) {
@@ -320,10 +322,10 @@ function applyRealtimeOrderItemUpdate(
     return 'refetch';
   }
 
-  const nextQuantity = toNumber(payload.new.quantity);
+  const nextQuantity = toNumber(newRow.quantity);
   const existingItem = currentOrder.items[targetIndex];
 
-  if (payload.new.menu_item_id && payload.new.menu_item_id !== existingItem.menuItemId) {
+  if (newRow.menu_item_id && newRow.menu_item_id !== existingItem.menuItemId) {
     return 'refetch';
   }
 
@@ -332,16 +334,16 @@ function applyRealtimeOrderItemUpdate(
     ...existingItem,
     quantity: nextQuantity,
     note:
-      payload.new.note !== undefined
-        ? normalizeOrderItemNote(payload.new.note) || null
+      newRow.note !== undefined
+        ? normalizeOrderItemNote(newRow.note) || null
         : existingItem.note,
     unitPrice:
-      payload.new.unit_price !== undefined
-        ? toNumber(payload.new.unit_price)
+      newRow.unit_price !== undefined
+        ? toNumber(newRow.unit_price)
         : existingItem.unitPrice,
     price:
-      payload.new.unit_price !== undefined
-        ? toNumber(payload.new.unit_price)
+      newRow.unit_price !== undefined
+        ? toNumber(newRow.unit_price)
         : existingItem.price,
   };
 
@@ -355,7 +357,7 @@ function applyRealtimeOrderItemDelete(
   currentOrder: UiOrder,
   payload: RealtimePostgresChangesPayload<OrderItemRealtimeRow>,
 ): UiOrder | 'refetch' {
-  const deletedId = toNullableString(payload.old.id);
+  const deletedId = toNullableString((payload.old as Partial<OrderItemRealtimeRow>).id);
 
   if (!deletedId) {
     return 'refetch';

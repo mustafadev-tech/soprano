@@ -505,7 +505,7 @@ export function useOrderActions(): UseOrderActionsResult {
   const flushPendingItems = useCallback(async (
     orderId: string,
     options?: { background?: boolean },
-  ): Promise<boolean> {
+  ): Promise<boolean> => {
     const queue = orderQueues.get(orderId);
 
     if (!queue || !queue.hasPending()) {

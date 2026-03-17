@@ -8,7 +8,7 @@ import { getNextCategorySortOrder, mapCategory } from '@/app/api/_server/queries
 import { parseNonEmptyString, readJsonObject } from '@/app/api/_server/validation';
 
 export async function POST(request: Request): Promise<Response> {
-  return runRoute(request, { params: {} }, async (incomingRequest) => {
+  return runRoute(request, { params: Promise.resolve({}) }, async (incomingRequest) => {
     const { supabase } = await requireRole(['soprano_admin']);
     const body = await readJsonObject(incomingRequest);
     const name = parseNonEmptyString(body.name, 'name');

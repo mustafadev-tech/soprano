@@ -11,7 +11,7 @@ import {
 } from '@/lib/appSession';
 
 export async function POST(request: Request): Promise<Response> {
-  return runRoute(request, { params: {} }, async (incomingRequest) => {
+  return runRoute(request, { params: Promise.resolve({}) }, async (incomingRequest) => {
     const supabase = await getSupabaseRouteClient();
     const body = await readJsonObject(incomingRequest);
     const username = parseNonEmptyString(body.username, 'username');
