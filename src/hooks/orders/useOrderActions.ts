@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 
 import { ItemSyncQueue, type QueuedItem } from '@/lib/itemQueue';
@@ -367,6 +367,87 @@ function syncTableAvailable(tableId: string) {
   }));
 }
 
+async function processQueuedItems(orderId: string, items: QueuedItem[]): Promise<void> {
+  if (isTempOrderId(orderId)) {
+    throw new Error('Optimistic orders cannot be flushed before the server order exists');
+  }
+
+  let latestOrder = getOrderStoreState(orderId).order;
+
+  try {
+    const freshOrder = await unwrapApiResponse(
+      apiGet<GetOrderByIdResponse>(`/api/orders/${orderId}`, {
+        cacheTTL: 0,
+      }),
+    );
+    latestOrder = mapOrderDetailToUi(freshOrder);
+  } catch {
+    latestOrder = getOrderStoreState(orderId).order;
+  }
+
+  if (!latestOrder) {
+    throw new Error('Order sync state missing');
+  }
+
+  for (const item of items.sort((left, right) => left.addedAt - right.addedAt)) {
+    const matchingItem = latestOrder.items.find((entry) =>
+      isMatchingOrderItem(entry, item.menu_item_id, item.note),
+    );
+
+    if (item.quantity <= 0) {
+      if (!matchingItem) {
+        continue;
+      }
+
+      const response = await unwrapApiResponse(
+        apiDelete<DeleteOrderItemResponse>(`/api/orders/${orderId}/items/${matchingItem.id}`),
+      );
+      latestOrder = mapOrderDetailToUi(response);
+      continue;
+    }
+
+    if (matchingItem) {
+      if (matchingItem.quantity === item.quantity) {
+        continue;
+      }
+
+      const response = await unwrapApiResponse(
+        apiPatch<UpdateOrderItemResponse, UpdateOrderItemRequest>(
+          `/api/orders/${orderId}/items/${matchingItem.id}`,
+          { quantity: item.quantity },
+        ),
+      );
+      latestOrder = mapOrderDetailToUi(response);
+      continue;
+    }
+
+    const response = await unwrapApiResponse(
+      apiPost<AddOrderItemResponse, AddOrderItemRequest>(`/api/orders/${orderId}/items`, {
+        menu_item_id: item.menu_item_id,
+        quantity: item.quantity,
+        note: item.note ?? null,
+      }),
+    );
+    latestOrder = mapOrderDetailToUi(response);
+  }
+
+  clearCache(`/api/orders/${orderId}`);
+  clearCache('/api/tables');
+  const remainingPendingItems = orderQueues.get(orderId)?.entries() ?? [];
+  const nextOrder =
+    applyPendingItemsToOrder(latestOrder, remainingPendingItems, getMenuStoreState().menuItems) ??
+    latestOrder;
+
+  commitOrderStoreOrder(orderId, nextOrder, {
+    loading: false,
+    error: null,
+    initialized: true,
+    dirty: remainingPendingItems.length > 0,
+  });
+  syncTablesForOrder(nextOrder);
+  persistOrderDraft(nextOrder, remainingPendingItems);
+}
+
 export function useOrderActions(): UseOrderActionsResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -421,115 +502,7 @@ export function useOrderActions(): UseOrderActionsResult {
     };
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const flushAllPendingQueues = () => {
-      for (const [orderId, queue] of orderQueues.entries()) {
-        if (isTempOrderId(orderId) || !queue.hasPending()) {
-          continue;
-        }
-
-        void flushPendingItems(orderId, { background: true });
-      }
-    };
-
-    const intervalId = window.setInterval(flushAllPendingQueues, ORDER_FLUSH_SAFETY_INTERVAL_MS);
-
-    window.addEventListener('focus', flushAllPendingQueues);
-    document.addEventListener('visibilitychange', flushAllPendingQueues);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', flushAllPendingQueues);
-      document.removeEventListener('visibilitychange', flushAllPendingQueues);
-    };
-  }, []);
-
-  async function processQueuedItems(orderId: string, items: QueuedItem[]): Promise<void> {
-    if (isTempOrderId(orderId)) {
-      throw new Error('Optimistic orders cannot be flushed before the server order exists');
-    }
-
-    let latestOrder = getOrderStoreState(orderId).order;
-
-    try {
-      const freshOrder = await unwrapApiResponse(
-        apiGet<GetOrderByIdResponse>(`/api/orders/${orderId}`, {
-          cacheTTL: 0,
-        }),
-      );
-      latestOrder = mapOrderDetailToUi(freshOrder);
-    } catch {
-      latestOrder = getOrderStoreState(orderId).order;
-    }
-
-    if (!latestOrder) {
-      throw new Error('Order sync state missing');
-    }
-
-    for (const item of items.sort((left, right) => left.addedAt - right.addedAt)) {
-      const matchingItem = latestOrder.items.find((entry) =>
-        isMatchingOrderItem(entry, item.menu_item_id, item.note),
-      );
-
-      if (item.quantity <= 0) {
-        if (!matchingItem) {
-          continue;
-        }
-
-        const response = await unwrapApiResponse(
-          apiDelete<DeleteOrderItemResponse>(`/api/orders/${orderId}/items/${matchingItem.id}`),
-        );
-        latestOrder = mapOrderDetailToUi(response);
-        continue;
-      }
-
-      if (matchingItem) {
-        if (matchingItem.quantity === item.quantity) {
-          continue;
-        }
-
-        const response = await unwrapApiResponse(
-          apiPatch<UpdateOrderItemResponse, UpdateOrderItemRequest>(
-            `/api/orders/${orderId}/items/${matchingItem.id}`,
-            { quantity: item.quantity },
-          ),
-        );
-        latestOrder = mapOrderDetailToUi(response);
-        continue;
-      }
-
-      const response = await unwrapApiResponse(
-        apiPost<AddOrderItemResponse, AddOrderItemRequest>(`/api/orders/${orderId}/items`, {
-          menu_item_id: item.menu_item_id,
-          quantity: item.quantity,
-          note: item.note ?? null,
-        }),
-      );
-      latestOrder = mapOrderDetailToUi(response);
-    }
-
-    clearCache(`/api/orders/${orderId}`);
-    clearCache('/api/tables');
-    const remainingPendingItems = orderQueues.get(orderId)?.entries() ?? [];
-    const nextOrder =
-      applyPendingItemsToOrder(latestOrder, remainingPendingItems, getMenuStoreState().menuItems) ??
-      latestOrder;
-
-    commitOrderStoreOrder(orderId, nextOrder, {
-      loading: false,
-      error: null,
-      initialized: true,
-      dirty: remainingPendingItems.length > 0,
-    });
-    syncTablesForOrder(nextOrder);
-    persistOrderDraft(nextOrder, remainingPendingItems);
-  }
-
-  async function flushPendingItems(
+  const flushPendingItems = useCallback(async (
     orderId: string,
     options?: { background?: boolean },
   ): Promise<boolean> {
@@ -575,7 +548,34 @@ export function useOrderActions(): UseOrderActionsResult {
         setLoading(false);
       }
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const flushAllPendingQueues = () => {
+      for (const [orderId, queue] of orderQueues.entries()) {
+        if (isTempOrderId(orderId) || !queue.hasPending()) {
+          continue;
+        }
+
+        void flushPendingItems(orderId, { background: true });
+      }
+    };
+
+    const intervalId = window.setInterval(flushAllPendingQueues, ORDER_FLUSH_SAFETY_INTERVAL_MS);
+
+    window.addEventListener('focus', flushAllPendingQueues);
+    document.addEventListener('visibilitychange', flushAllPendingQueues);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', flushAllPendingQueues);
+      document.removeEventListener('visibilitychange', flushAllPendingQueues);
+    };
+  }, [flushPendingItems]);
 
   async function openOrder(tableId: string): Promise<UiOrder | null> {
     const existingRequest = openingOrderRequests.get(tableId);
