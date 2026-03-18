@@ -13,3 +13,6 @@ out/
 # misc
 .DS_Store
 *.tsbuildinfo
+
+# git worktrees
+.worktrees/
