@@ -337,11 +337,16 @@ function getQuantityDeltaFromOrderItemPayload(
   }
 
   const orderId = toNullableString(payload.old.order_id);
-  const quantity = toNumber(payload.old.quantity);
 
-  if (!orderId || payload.old.quantity === undefined) {
+  if (!orderId) {
     return null;
   }
+
+  if (payload.old.quantity === undefined) {
+    return { orderId, quantityDelta: 0 };
+  }
+
+  const quantity = toNumber(payload.old.quantity);
 
   return {
     orderId,

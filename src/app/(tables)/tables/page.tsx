@@ -8,7 +8,7 @@ import { useMenu } from '@/hooks/menu/useMenu';
 import { refetchOrderStore, useOrder } from '@/hooks/orders/useOrder';
 import { useOrderActions } from '@/hooks/orders/useOrderActions';
 import { useTableActions } from '@/hooks/tables/useTableActions';
-import { useTables } from '@/hooks/tables/useTables';
+import { refetchTablesStore, useTables } from '@/hooks/tables/useTables';
 
 function isTempOrderId(orderId: string | null): boolean {
   return Boolean(orderId?.startsWith('temp:order:'));
@@ -66,6 +66,14 @@ export default function TablesPage() {
   useEffect(() => {
     selectedTableIdRef.current = selectedTableId;
   }, [selectedTableId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void refetchTablesStore({ fresh: true, background: true });
+    }, 60_000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (totalError && totalError !== lastErrorRef.current) {
