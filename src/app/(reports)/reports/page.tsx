@@ -95,6 +95,7 @@ function AdminReportsPage() {
   const hourlyEntries = report?.hourlyBreakdown ?? [];
   const recentDays = report?.recentDays ?? [];
   const tableEntries = report?.byTable ?? [];
+  const deletedBills = report?.deletedBills ?? [];
 
   const sortedItems = [...items].sort((a, b) => b.total - a.total);
   const grandTotal = items.reduce((s, i) => s + i.total, 0);
@@ -404,6 +405,69 @@ function AdminReportsPage() {
                 </TableBody>
               </Table>
             </div>
+          </section>
+
+          {/* Silinen Hesaplar */}
+          <section className="flex flex-col gap-3">
+            <h2 className="text-base font-medium">Silinen Hesaplar</h2>
+            {deletedBills.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Bu tarihte silinmiş hesap bulunmuyor.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Silinen hesaplar ciro hesabına dahil edilmez.
+                </p>
+                {deletedBills.map((bill) => (
+                  <Collapsible key={bill.id}>
+                    <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm hover:bg-destructive/10 transition-colors duration-150">
+                      <span className="font-medium text-destructive">{bill.tableName}</span>
+                      <div className="flex items-center gap-4 text-muted-foreground">
+                        <span className="text-xs">
+                          {formatDateTime(bill.deletedAt)}
+                        </span>
+                        <span className="tabular-nums text-destructive font-medium">
+                          {formatPrice(bill.totalAmount)} ₺
+                        </span>
+                        <ChevronDown
+                          strokeWidth={1.5}
+                          size={14}
+                          className="transition-transform duration-150 data-open:rotate-180"
+                        />
+                      </div>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="border border-t-0 border-destructive/30 rounded-b-lg overflow-hidden">
+                      <div className="px-4 py-3">
+                        <div className="flex flex-col gap-2">
+                          {bill.items.map((item, index) => (
+                            <div
+                              key={`${bill.id}-${item.name}-${index}`}
+                              className="flex items-center justify-between text-sm"
+                            >
+                              <span>{item.name}</span>
+                              <span className="tabular-nums text-muted-foreground">
+                                {item.quantity} x {formatPrice(item.unitPrice)} ₺
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-3 border-t border-destructive/20 pt-2 flex justify-between text-sm font-medium">
+                          <span>Toplam</span>
+                          <span className="tabular-nums text-destructive">
+                            {formatPrice(bill.totalAmount)} ₺
+                          </span>
+                        </div>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                ))}
+                <div className="flex justify-between px-4 py-2 text-sm font-semibold text-destructive">
+                  <span>Silinen Hesaplar Toplamı</span>
+                  <span className="tabular-nums">
+                    {formatPrice(deletedBills.reduce((s, b) => s + b.totalAmount, 0))} ₺
+                  </span>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Masa Detayları collapsibles */}

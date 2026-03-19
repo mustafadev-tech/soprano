@@ -1,5 +1,5 @@
 import { Badge } from '@/components/ui/badge';
-import type { TableStatus } from '@/components/_types';
+import type { TableStatus } from '@/components/_uiTypes';
 
 const statusMap: Record<TableStatus, { variant: 'default' | 'secondary' | 'outline' | 'destructive'; label: string }> = {
   available: { variant: 'default', label: 'Müsait' },

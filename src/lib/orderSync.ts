@@ -27,7 +27,8 @@ export function applyPendingItemsToOrder(
 
   let nextItems = [...order.items];
 
-  for (const pendingItem of pendingItems) {
+  const sortedPendingItems = [...pendingItems].sort((a, b) => a.addedAt - b.addedAt);
+  for (const pendingItem of sortedPendingItems) {
     const menuItem = menuItems.find((item) => item.id === pendingItem.menu_item_id);
     const existingIndex = nextItems.findIndex(
       (item) =>

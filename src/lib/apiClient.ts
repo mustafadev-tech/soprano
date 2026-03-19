@@ -65,6 +65,9 @@ const apiErrorMessages: Array<[needle: string, message: string]> = [
   ['Invalid credentials', 'Kullanici adi veya sifre hatali'],
   ['Failed to close', 'Islem gerceklestirilemedi, tekrar deneyin'],
   ['Failed to create table', 'Masa eklenemedi, tekrar deneyin'],
+  ['Source order has no items', 'Transfer edilecek sipariş boş'],
+  ['Cannot transfer to the same table', 'Aynı masaya transfer yapılamaz'],
+  ['Target table not found', 'Hedef masa bulunamadı'],
   ['Internal server error', 'Sunucu hatasi olustu'],
 ];
 

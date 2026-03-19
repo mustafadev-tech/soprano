@@ -119,6 +119,22 @@ export interface TodoListItem extends Todo {
   completedByName: string | null;
 }
 
+export interface DeletedBillItem {
+  menu_item_name: string;
+  quantity: number;
+  unit_price: number;
+}
+
+export interface DeletedBill {
+  id: string;
+  original_order_id: string;
+  table_name: string;
+  total_amount: number;
+  deleted_by_name: string | null;
+  deleted_at: string;
+  items: DeletedBillItem[];
+}
+
 export interface DailyReportSummary {
   date: string;
   generated_at: string;
@@ -137,6 +153,7 @@ export interface DailyReportSummary {
   payment_breakdown: PaymentBreakdown[];
   hourly_breakdown: HourlyReport[];
   recent_days: DailyReportHistoryDay[];
+  deleted_bills: DeletedBill[];
 }
 
 export interface TableReport {
@@ -306,6 +323,9 @@ export type DeleteTodoResponse = ApiResponse<DeletedRecord>;
 export type DeleteCategoryResponse = ApiResponse<DeletedRecord>;
 export type GetDailyReportResponse = ApiResponse<DailyReportSummary>;
 export type GetDailyReportExportResponse = string;
+export type DeleteBillResponse = ApiResponse<{ success: boolean }>;
+export interface TransferOrderRequest { target_table_id: string; }
+export type TransferOrderResponse = ApiResponse<OrderDetail>;
 
 export interface SopranoCafeApiContract {
   'GET /api/tables': {

@@ -6,6 +6,7 @@ import {
 } from '@supabase/supabase-js';
 
 import { apiGet, getApiErrorMessage, unwrapApiResponse } from '@/lib/apiClient';
+import { toNumber, toNullableString } from '@/lib/typeConversions';
 import {
   listOrderDrafts,
   removeOrderDraftByOrderId,
@@ -70,23 +71,6 @@ function notifyListeners() {
   for (const listener of listeners) {
     listener();
   }
-}
-
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const parsedValue = Number(value);
-    return Number.isFinite(parsedValue) ? parsedValue : 0;
-  }
-
-  return 0;
-}
-
-function toNullableString(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function toUiTableStatus(status: TableRealtimeRow['status']): UiTable['status'] {

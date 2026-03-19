@@ -4,6 +4,7 @@ import type {
   CategoryReport,
   DailyReportHistoryDay,
   DailyReportSummary,
+  DeletedBill,
   ItemReport,
   OrderReport,
   OrderReportItem,
@@ -219,6 +220,58 @@ async function listOrderItemDetails(
   );
 }
 
+interface DeletedOrderRow {
+  id: string;
+  original_order_id: string;
+  table_name: string;
+  total_amount: NumericValue;
+  deleted_at: string;
+  deleted_by: string | null;
+  deleted_order_items: Array<{
+    menu_item_name: string;
+    quantity: number;
+    unit_price: NumericValue;
+  }>;
+  // Supabase returns joined one-to-one rows as an array in the inferred type
+  staff_accounts: Array<{ full_name: string | null }> | { full_name: string | null } | null;
+}
+
+async function fetchDeletedOrdersForDate(
+  supabase: DatabaseClient,
+  window: ReportWindow,
+): Promise<DeletedBill[]> {
+  const { data, error } = await supabase
+    .from('deleted_orders')
+    .select(
+      'id, original_order_id, table_name, total_amount, deleted_at, deleted_by, deleted_order_items(menu_item_name, quantity, unit_price), staff_accounts(full_name)',
+    )
+    .gte('deleted_at', window.start_iso)
+    .lt('deleted_at', window.next_start_iso)
+    .order('deleted_at', { ascending: true });
+
+  if (error) {
+    // Non-fatal: return empty list so the rest of the report still works
+    console.error('Failed to load deleted orders for report.', error);
+    return [];
+  }
+
+  return (data ?? []).map((row: DeletedOrderRow) => ({
+    id: row.id,
+    original_order_id: row.original_order_id,
+    table_name: row.table_name,
+    total_amount: toNumber(row.total_amount),
+    deleted_by_name: Array.isArray(row.staff_accounts)
+      ? (row.staff_accounts[0]?.full_name ?? null)
+      : (row.staff_accounts?.full_name ?? null),
+    deleted_at: row.deleted_at,
+    items: (row.deleted_order_items ?? []).map((item) => ({
+      menu_item_name: item.menu_item_name,
+      quantity: item.quantity,
+      unit_price: toNumber(item.unit_price),
+    })),
+  }));
+}
+
 async function countOpenOrdersAtEndOfDay(
   supabase: DatabaseClient,
   window: ReportWindow,
@@ -226,6 +279,7 @@ async function countOpenOrdersAtEndOfDay(
   const { count, error } = await supabase
     .from('orders')
     .select('id', { count: 'exact', head: true })
+    .is('deleted_at', null)
     .lt('opened_at', window.next_start_iso)
     .or(`closed_at.is.null,closed_at.gte.${window.next_start_iso}`);
 
@@ -300,6 +354,7 @@ function buildEmptyReport(
   recentDays: DailyReportHistoryDay[],
   source: 'live' | 'snapshot',
   snapshotUpdatedAt: string | null,
+  deletedBills: DeletedBill[] = [],
 ): DailyReportSummary {
   return {
     date,
@@ -319,6 +374,7 @@ function buildEmptyReport(
     payment_breakdown: [],
     hourly_breakdown: [],
     recent_days: recentDays,
+    deleted_bills: deletedBills,
   };
 }
 
@@ -386,6 +442,7 @@ function buildLiveReport(
   openOrdersCount: number,
   recentDays: DailyReportHistoryDay[],
   snapshotUpdatedAt: string | null,
+  deletedBills: DeletedBill[] = [],
 ): DailyReportSummary {
   const itemsByOrderId = new Map<string, OrderReportItem[]>();
 
@@ -476,6 +533,7 @@ function buildLiveReport(
     payment_breakdown: buildPaymentBreakdown(closedOrderRows),
     hourly_breakdown: buildHourlyBreakdown(closedOrderRows),
     recent_days: recentDays,
+    deleted_bills: deletedBills,
   };
 }
 
@@ -535,9 +593,10 @@ export async function refreshDailyReportSnapshot(
   dateParam: string | null,
 ): Promise<void> {
   const window = resolveReportWindow(dateParam);
-  const [closedOrderRows, openOrdersCount] = await Promise.all([
+  const [closedOrderRows, openOrdersCount, deletedBills] = await Promise.all([
     listClosedOrderSummaries(supabase, window),
     countOpenOrdersAtEndOfDay(supabase, window),
+    fetchDeletedOrdersForDate(supabase, window),
   ]);
 
   const orderIds = closedOrderRows.map((row) => row.order_id);
@@ -549,6 +608,7 @@ export async function refreshDailyReportSnapshot(
     openOrdersCount,
     [],
     null,
+    deletedBills,
   );
 
   await upsertReportSnapshot(supabase, report);
@@ -598,17 +658,18 @@ export async function getDailyReport(
   dateParam: string | null,
 ): Promise<DailyReportSummary> {
   const window = resolveReportWindow(dateParam);
-  const [snapshotForDate, recentSnapshotRows, closedOrderRows, openOrdersCount] = await Promise.all([
+  const [snapshotForDate, recentSnapshotRows, closedOrderRows, openOrdersCount, deletedBills] = await Promise.all([
     getSnapshotForDate(supabase, window.date),
     listSnapshotRowsInWindow(supabase, window.date),
     listClosedOrderSummaries(supabase, window),
     countOpenOrdersAtEndOfDay(supabase, window),
+    fetchDeletedOrdersForDate(supabase, window),
   ]);
 
   const recentDays = buildHistoryDays(window.date, recentSnapshotRows);
   const orderIds = closedOrderRows.map((row) => row.order_id);
   const itemRows = await listOrderItemDetails(supabase, orderIds);
-  const hasLiveData = closedOrderRows.length > 0 || openOrdersCount > 0 || window.date === getTodayInIstanbul();
+  const hasLiveData = closedOrderRows.length > 0 || openOrdersCount > 0 || window.date === getTodayInIstanbul() || deletedBills.length > 0;
 
   if (hasLiveData) {
     const liveReport = buildLiveReport(
@@ -618,6 +679,7 @@ export async function getDailyReport(
       openOrdersCount,
       recentDays,
       snapshotForDate?.updated_at ?? null,
+      deletedBills,
     );
 
     const snapshotUpdatedAt = new Date().toISOString();
@@ -635,7 +697,7 @@ export async function getDailyReport(
     return mergeSnapshotPayload(snapshotForDate, recentDays);
   }
 
-  return buildEmptyReport(window.date, recentDays, 'live', null);
+  return buildEmptyReport(window.date, recentDays, 'live', null, deletedBills);
 }
 
 export function buildDailyReportCsv(report: DailyReportSummary): string {

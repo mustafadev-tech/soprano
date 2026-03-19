@@ -25,11 +25,14 @@ import type {
   CloseOrderRequest,
   CreateOrderRequest,
   CreateOrderResponse,
+  DeleteBillResponse,
   DeleteOrderResponse,
   GetOrderByIdResponse,
   DeleteOrderItemResponse,
   UpdateOrderItemRequest,
   UpdateOrderItemResponse,
+  TransferOrderRequest,
+  TransferOrderResponse,
 } from '@/types/contract';
 import { mapOrderDetailToUi, type UiOrder, type UiTableStatus } from '@/types/api';
 import { getMenuStoreState } from '@/hooks/menu/useMenu';
@@ -37,6 +40,7 @@ import {
   clearOrderStoreState,
   commitOrderStoreOrder,
   getOrderStoreState,
+  recordDeletedOrderItemId,
   refetchOrderStore,
   setOrderStoreState,
 } from '@/hooks/orders/useOrder';
@@ -50,6 +54,8 @@ interface UseOrderActionsResult {
     paymentMethod: 'cash' | 'credit_card',
     options?: { silent?: boolean },
   ) => Promise<UiOrder | null>;
+  deleteOrder: (orderId: string) => Promise<boolean>;
+  transferOrder: (sourceOrderId: string, targetTableId: string) => Promise<UiOrder | null>;
   addItem: (
     orderId: string,
     menuItemId: string,
@@ -399,6 +405,11 @@ async function processQueuedItems(orderId: string, items: QueuedItem[]): Promise
         continue;
       }
 
+      // Record the real server ID before the DELETE so that any delayed Realtime
+      // INSERT event (which carries this same ID) is suppressed immediately,
+      // even if the item was locally tracked under a temp ID at deletion time.
+      recordDeletedOrderItemId(orderId, matchingItem.id);
+
       const response = await unwrapApiResponse(
         apiDelete<DeleteOrderItemResponse>(`/api/orders/${orderId}/items/${matchingItem.id}`),
       );
@@ -434,6 +445,22 @@ async function processQueuedItems(orderId: string, items: QueuedItem[]): Promise
   clearCache(`/api/orders/${orderId}`);
   clearCache('/api/tables');
   const remainingPendingItems = orderQueues.get(orderId)?.entries() ?? [];
+
+  // For any pending deletions queued during this flush, record the server ID now.
+  // This covers the case where the user deleted an item (temp ID) while a POST
+  // was in-flight: by now latestOrder has the real server ID, so we can record it
+  // before a stale Realtime INSERT arrives.
+  for (const pendingItem of remainingPendingItems) {
+    if (pendingItem.quantity <= 0) {
+      const serverItem = latestOrder.items.find((entry) =>
+        isMatchingOrderItem(entry, pendingItem.menu_item_id, pendingItem.note),
+      );
+      if (serverItem) {
+        recordDeletedOrderItemId(orderId, serverItem.id);
+      }
+    }
+  }
+
   const nextOrder =
     applyPendingItemsToOrder(latestOrder, remainingPendingItems, getMenuStoreState().menuItems) ??
     latestOrder;
@@ -898,7 +925,7 @@ export function useOrderActions(): UseOrderActionsResult {
     const optimisticOrder = recalculateTotal({
       ...previousOrder,
       items: previousOrder.items.map((item) =>
-        item.id === itemId ? { ...item, quantity } : item,
+        item.id === itemId ? { ...item, quantity, isOptimistic: true } : item,
       ),
     });
 
@@ -943,6 +970,12 @@ export function useOrderActions(): UseOrderActionsResult {
       ? getQueuedItemKey(removedItem.menuItemId, removedItem.note)
       : null;
 
+    // Record the deletion immediately so stale Realtime INSERT events for this
+    // item ID are suppressed before the Realtime DELETE event arrives.
+    if (removedItem) {
+      recordDeletedOrderItemId(orderId, removedItem.id);
+    }
+
     const optimisticOrder = recalculateTotal({
       ...previousOrder,
       items: previousOrder.items.filter((item) => item.id !== itemId),
@@ -975,10 +1008,118 @@ export function useOrderActions(): UseOrderActionsResult {
     return optimisticOrder;
   }
 
+  async function deleteOrder(orderId: string): Promise<boolean> {
+    setLoading(true);
+    setError(null);
+
+    const didFlush = await flushPendingItems(orderId);
+
+    if (!didFlush) {
+      setLoading(false);
+      return false;
+    }
+
+    const orderState = getOrderStoreState(orderId);
+    const tableId = orderState.order?.tableId ?? null;
+    const previousTablesState = getTablesStoreState();
+
+    if (tableId) {
+      syncTableAvailable(tableId);
+    }
+
+    try {
+      await unwrapApiResponse(
+        apiPost<DeleteBillResponse>(`/api/orders/${orderId}/delete`),
+      );
+      clearCache(`/api/orders/${orderId}`);
+      clearCache('/api/tables');
+      clearOrderQueue(orderId);
+      clearOrderStoreState(orderId);
+
+      if (tableId) {
+        removeOrderDraftByTableId(tableId);
+      }
+
+      toast.success('Hesap silindi');
+      return true;
+    } catch (mutationError) {
+      if (tableId) {
+        restoreTablesState(previousTablesState);
+      }
+      const message = getApiErrorMessage(mutationError, 'Hesap silinemedi, tekrar deneyin');
+      setError(message);
+      toast.error(message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function transferOrder(
+    sourceOrderId: string,
+    targetTableId: string,
+  ): Promise<UiOrder | null> {
+    setLoading(true);
+    setError(null);
+
+    const didFlush = await flushPendingItems(sourceOrderId);
+
+    if (!didFlush) {
+      setLoading(false);
+      return null;
+    }
+
+    const sourceOrderState = getOrderStoreState(sourceOrderId);
+    const sourceTableId = sourceOrderState.order?.tableId ?? null;
+
+    try {
+      const data = await unwrapApiResponse(
+        apiPost<TransferOrderResponse, TransferOrderRequest>(
+          `/api/orders/${sourceOrderId}/transfer`,
+          { target_table_id: targetTableId },
+        ),
+      );
+      const targetOrder = mapOrderDetailToUi(data);
+
+      clearOrderQueue(sourceOrderId);
+      clearOrderStoreState(sourceOrderId);
+
+      if (sourceTableId) {
+        removeOrderDraftByTableId(sourceTableId);
+        syncTableAvailable(sourceTableId);
+      }
+
+      clearCache(`/api/orders/${sourceOrderId}`);
+      clearCache('/api/tables');
+
+      commitOrderStoreOrder(targetOrder.id, targetOrder, {
+        loading: false,
+        error: null,
+        initialized: true,
+        dirty: false,
+      });
+      syncTablesForOrder(targetOrder);
+
+      return targetOrder;
+    } catch (mutationError) {
+      const message = getApiErrorMessage(
+        mutationError,
+        'Transfer gerçekleştirilemedi, tekrar deneyin',
+      );
+      setError(message);
+      toast.error(message);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return {
     createOptimisticOrder: createOptimisticOrderState,
     openOrder,
     closeOrder,
+    deleteOrder,
+    transferOrder,
     addItem,
     updateItemQuantity,
     removeItem,

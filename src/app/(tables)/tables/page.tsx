@@ -36,6 +36,8 @@ export default function TablesPage() {
     createOptimisticOrder,
     openOrder,
     closeOrder,
+    deleteOrder,
+    transferOrder,
     addItem,
     updateItemQuantity,
     removeItem,
@@ -207,6 +209,42 @@ export default function TablesPage() {
     }
   }
 
+  async function handleDeleteBill() {
+    if (!selectedOrderId) {
+      return;
+    }
+
+    const success = await deleteOrder(selectedOrderId);
+
+    if (success) {
+      setPanelOpen(false);
+      setSelectedOrderId(null);
+      setSelectedTableId(null);
+    }
+  }
+
+  async function handleTransferOrder(targetTableId: string) {
+    if (!selectedOrderId) {
+      return;
+    }
+
+    const targetOrder = await transferOrder(selectedOrderId, targetTableId);
+
+    if (targetOrder) {
+      toast.success('Sipariş transfer edildi');
+      setPanelOpen(false);
+      setSelectedOrderId(null);
+      setSelectedTableId(null);
+
+      setTimeout(() => {
+        const targetTable = tables.find((t) => t.currentOrderId === targetOrder.id);
+        if (targetTable) {
+          void handleSelectTable(targetTable.id);
+        }
+      }, 0);
+    }
+  }
+
   return (
     <div className="p-6">
       <TableGrid
@@ -231,11 +269,15 @@ export default function TablesPage() {
           sortOrder: category.sort_order,
         }))}
         menuItems={menuItems}
+        tables={tables}
+        orders={orders}
         onAddItem={handleAddItem}
         onIncrement={handleIncrementItem}
         onDecrement={handleDecrementItem}
         onRemove={handleRemoveItem}
         onCloseOrder={handleCloseOrder}
+        onDeleteBill={handleDeleteBill}
+        onTransferOrder={handleTransferOrder}
       />
     </div>
   );

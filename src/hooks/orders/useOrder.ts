@@ -6,6 +6,7 @@ import {
 } from '@supabase/supabase-js';
 
 import { apiGet, getApiErrorMessage, unwrapApiResponse } from '@/lib/apiClient';
+import { toNumber, toNullableString } from '@/lib/typeConversions';
 import { applyPendingItemsToOrder } from '@/lib/orderSync';
 import {
   getOrderDraftByOrderId,
@@ -60,29 +61,15 @@ const emptyOrderState: OrderStoreEntry = {
 
 const orderStore = new Map<string, OrderStoreEntry>();
 const orderListeners = new Set<() => void>();
+// Tracks item IDs that have been confirmed deleted (via Realtime DELETE events).
+// Used to suppress stale INSERT events that arrive after a DELETE.
+const deletedOrderItemIds = new Map<string, Set<string>>();
 let draftsHydrated = false;
 
 function notifyOrderListeners() {
   for (const listener of orderListeners) {
     listener();
   }
-}
-
-function toNumber(value: unknown): number {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const parsedValue = Number(value);
-    return Number.isFinite(parsedValue) ? parsedValue : 0;
-  }
-
-  return 0;
-}
-
-function toNullableString(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function normalizeOrderItemNote(note?: string | null): string {
@@ -264,6 +251,12 @@ function applyRealtimeOrderItemInsert(
   );
 
   if (existingIndex === -1) {
+    // Skip if this item was previously deleted: a delayed INSERT arriving after
+    // its own DELETE event would otherwise re-add the item to the UI.
+    if (deletedOrderItemIds.get(currentOrder.id)?.has(nextItem.id)) {
+      return currentOrder;
+    }
+
     return roundOrderTotal({
       ...currentOrder,
       items: [...currentOrder.items, nextItem],
@@ -272,6 +265,14 @@ function applyRealtimeOrderItemInsert(
 
   const nextItems = [...currentOrder.items];
   const existingItem = nextItems[existingIndex];
+
+  // Skip if:
+  // - exact server-ID match: we already have authoritative server data for this row,
+  //   any INSERT event for it is a late/duplicate notification → ignore
+  // - still optimistic: item is pending confirmation, skip to avoid reverting unsaved changes
+  if (existingItem.id === nextItem.id || existingItem.isOptimistic) {
+    return currentOrder;
+  }
 
   nextItems[existingIndex] = {
     ...existingItem,
@@ -325,6 +326,12 @@ function applyRealtimeOrderItemUpdate(
   const nextQuantity = toNumber(newRow.quantity);
   const existingItem = currentOrder.items[targetIndex];
 
+  // If the item is optimistic (pending server confirmation), skip quantity override
+  // to prevent stale realtime events from reverting unsaved user changes.
+  if (existingItem.isOptimistic) {
+    return currentOrder;
+  }
+
   if (newRow.menu_item_id && newRow.menu_item_id !== existingItem.menuItemId) {
     return 'refetch';
   }
@@ -362,6 +369,15 @@ function applyRealtimeOrderItemDelete(
   if (!deletedId) {
     return 'refetch';
   }
+
+  // Always record this deletion so that a delayed Realtime INSERT for the same
+  // item ID (arriving after the DELETE) is suppressed and does not re-add the item.
+  let ids = deletedOrderItemIds.get(currentOrder.id);
+  if (!ids) {
+    ids = new Set();
+    deletedOrderItemIds.set(currentOrder.id, ids);
+  }
+  ids.add(deletedId);
 
   const targetIndex = currentOrder.items.findIndex((item) => item.id === deletedId);
 
@@ -422,8 +438,22 @@ export function commitOrderStoreOrder(
   }));
 }
 
+export function recordDeletedOrderItemId(orderId: string, itemId: string) {
+  if (itemId.startsWith('temp:')) {
+    return; // Temp IDs were never persisted to server, no stale INSERT to suppress
+  }
+
+  let ids = deletedOrderItemIds.get(orderId);
+  if (!ids) {
+    ids = new Set();
+    deletedOrderItemIds.set(orderId, ids);
+  }
+  ids.add(itemId);
+}
+
 export function clearOrderStoreState(orderId: string) {
   orderStore.delete(orderId);
+  deletedOrderItemIds.delete(orderId);
   notifyOrderListeners();
 }
 

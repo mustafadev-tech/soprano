@@ -320,7 +320,7 @@ function mapOpenOrderSummary(order: Order, itemCount: number): OpenOrderSummary 
   };
 }
 
-async function listRawOrderItems(
+export async function listRawOrderItems(
   supabase: DatabaseClient,
   orderId: string,
 ): Promise<OrderItemRow[]> {
@@ -890,6 +890,99 @@ export async function applyOrderItemMutation(
 
   await recalculateOrderTotal(supabase, order.id);
   return 0;
+}
+
+export async function archiveAndDeleteOrder(
+  supabase: DatabaseClient,
+  orderId: string,
+  deletedBy: string,
+): Promise<void> {
+  const order = await getOrderById(supabase, orderId);
+
+  if (!order) {
+    throw notFound('Order not found.');
+  }
+
+  if (order.status !== 'open') {
+    throw conflict('Cannot delete a closed order.');
+  }
+
+  const tableRow = await readMaybeRow<TableRow>(
+    supabase
+      .from('tables')
+      .select('id, name, capacity, status, created_at')
+      .eq('id', order.table_id)
+      .maybeSingle(),
+    'Failed to load order table.',
+  );
+
+  if (!tableRow) {
+    throw serverError('Order references a missing table.');
+  }
+
+  const orderDetail = await getOrderDetail(supabase, orderId);
+
+  if (!orderDetail) {
+    throw serverError('Failed to load order detail for archiving.');
+  }
+
+  // Insert archive record
+  const { data: archivedOrder, error: archiveError } = await supabase
+    .from('deleted_orders')
+    .insert({
+      original_order_id: order.id,
+      table_id: order.table_id,
+      table_name: tableRow.name,
+      total_amount: order.total_amount,
+      deleted_by: deletedBy,
+    })
+    .select('id')
+    .single();
+
+  if (archiveError || !archivedOrder) {
+    throw serverError('Failed to archive order.');
+  }
+
+  if (orderDetail.order_items.length > 0) {
+    const { error: itemsError } = await supabase.from('deleted_order_items').insert(
+      orderDetail.order_items.map((item) => ({
+        deleted_order_id: archivedOrder.id,
+        menu_item_name: item.menu_item_name,
+        quantity: item.quantity,
+        unit_price: toNumber(item.unit_price),
+      })),
+    );
+
+    if (itemsError) {
+      throw serverError('Failed to archive order items.');
+    }
+  }
+
+  // Soft-delete: mark order as closed with deleted_at timestamp
+  const deletedAt = new Date().toISOString();
+  const { error: deleteError } = await supabase
+    .from('orders')
+    .update({
+      status: 'closed',
+      closed_at: deletedAt,
+      deleted_at: deletedAt,
+    })
+    .eq('id', orderId);
+
+  if (deleteError) {
+    throw serverError('Failed to soft-delete order.');
+  }
+
+  // Restore table status
+  const restoredStatus = getRestoredTableStatus(order.table_status_before_open);
+  const { error: tableError } = await supabase
+    .from('tables')
+    .update({ status: restoredStatus })
+    .eq('id', order.table_id);
+
+  if (tableError) {
+    throw serverError('Failed to restore table status.');
+  }
 }
 
 export async function syncOrderToDesiredItems(

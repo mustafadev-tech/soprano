@@ -36,6 +36,7 @@ export function MenuSelector({ categories, menuItems, onAddItem }: MenuSelectorP
   const [activeCategoryId, setActiveCategoryId] = useState<'all' | string>('all');
   const [addedId, setAddedId] = useState<string | null>(null);
   const flashTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
 
   const filteredItems =
     activeCategoryId === 'all'
@@ -98,11 +99,22 @@ export function MenuSelector({ categories, menuItems, onAddItem }: MenuSelectorP
     };
   }, []);
 
+  useEffect(() => {
+    const el = categoryScrollRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Category pills */}
-      <div className="shrink-0 border-b border-border bg-background px-3 py-3">
-        <div className="flex gap-1.5 overflow-x-auto whitespace-nowrap no-scrollbar">
+      <div className="shrink-0 border-b border-border px-3 py-3">
+        <div ref={categoryScrollRef} className="flex gap-1.5 overflow-x-auto whitespace-nowrap no-scrollbar">
           {categoryTabs.map((tab) => (
             <button
               key={tab.value}
@@ -135,7 +147,7 @@ export function MenuSelector({ categories, menuItems, onAddItem }: MenuSelectorP
                   className={cn(
                     'flex items-center gap-2 px-3 py-2.5 transition-colors duration-100',
                     item.available
-                      ? 'cursor-default hover:bg-muted/70'
+                      ? 'cursor-default hover:bg-muted/50'
                       : 'opacity-30 pointer-events-none'
                   )}
                 >
@@ -161,7 +173,7 @@ export function MenuSelector({ categories, menuItems, onAddItem }: MenuSelectorP
                       whileTap={{ scale: 0.75 }}
                       transition={{ type: 'spring', stiffness: 500, damping: 25 }}
                       onClick={() => handleAddItem(item)}
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground transition-colors hover:bg-muted"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40 text-foreground transition-colors hover:bg-muted"
                     >
                       <AnimatePresence mode="wait" initial={false}>
                         {addedId === item.id ? (
@@ -201,9 +213,6 @@ export function MenuSelector({ categories, menuItems, onAddItem }: MenuSelectorP
         </AnimatePresence>
       </ScrollArea>
 
-      <p className="border-t border-border bg-muted/20 px-3 py-2 text-[10px] tracking-wide text-muted-foreground/80">
-        Yalnızca rozetli 1–9 kısayolları aktif
-      </p>
     </div>
   );
 }

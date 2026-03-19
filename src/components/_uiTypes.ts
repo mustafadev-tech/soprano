@@ -1,5 +1,3 @@
-// TODO: replace with imports from @/types/contract.ts when AGENT-2 delivers them
-
 export type TableStatus = 'available' | 'occupied' | 'reserved' | 'dirty';
 
 export interface Table {

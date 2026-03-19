@@ -5,6 +5,7 @@ import type {
   DailyReportSummary,
   DailyReportHistoryDay,
   CategoryReport,
+  DeletedBill,
   HourlyReport,
   ItemReport,
   MenuCategoryWithItems,
@@ -189,6 +190,22 @@ export interface UiReportHistoryEntry {
   snapshotUpdatedAt: string | null;
 }
 
+export interface UiDeletedBillItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface UiDeletedBill {
+  id: string;
+  originalOrderId: string;
+  tableName: string;
+  totalAmount: number;
+  deletedByName: string | null;
+  deletedAt: string;
+  items: UiDeletedBillItem[];
+}
+
 export interface UiDailyReport {
   date: string;
   generatedAt: string;
@@ -201,6 +218,7 @@ export interface UiDailyReport {
   paymentBreakdown: UiReportPaymentEntry[];
   hourlyBreakdown: UiReportHourlyEntry[];
   recentDays: UiReportHistoryEntry[];
+  deletedBills: UiDeletedBill[];
 }
 
 function toUiTableStatus(status: TableDetail['status']): UiTableStatus {
@@ -434,6 +452,22 @@ export function mapDailyHistoryToUi(
   };
 }
 
+export function mapDeletedBillToUi(bill: DeletedBill): UiDeletedBill {
+  return {
+    id: bill.id,
+    originalOrderId: bill.original_order_id,
+    tableName: bill.table_name,
+    totalAmount: bill.total_amount,
+    deletedByName: bill.deleted_by_name,
+    deletedAt: bill.deleted_at,
+    items: bill.items.map((item) => ({
+      name: item.menu_item_name,
+      quantity: item.quantity,
+      unitPrice: item.unit_price,
+    })),
+  };
+}
+
 export function mapDailyReportToUi(report: DailyReportSummary): UiDailyReport {
   return {
     date: report.date,
@@ -453,6 +487,7 @@ export function mapDailyReportToUi(report: DailyReportSummary): UiDailyReport {
     paymentBreakdown: report.payment_breakdown.map(mapPaymentBreakdownToUi),
     hourlyBreakdown: report.hourly_breakdown.map(mapHourlyReportToUi),
     recentDays: report.recent_days.map(mapDailyHistoryToUi),
+    deletedBills: (report.deleted_bills ?? []).map(mapDeletedBillToUi),
   };
 }
 

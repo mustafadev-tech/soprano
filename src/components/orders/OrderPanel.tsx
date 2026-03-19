@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, X, ShoppingCart, UtensilsCrossed } from 'lucide-react';
 import { AnimatePresence, motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { RoleGate } from '@/components/auth/RoleGate';
@@ -10,12 +10,23 @@ import {
   DialogTitle,
   DialogClose,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { OrderItemRow } from '@/components/orders/OrderItemRow';
 import { MenuSelector } from '@/components/orders/MenuSelector';
+import { TransferTableDialog } from '@/components/orders/TransferTableDialog';
 import { cn } from '@/lib/utils';
-import type { UiCategoryOption, UiOrder, UiMenuItem } from '@/types/api';
+import type { UiCategoryOption, UiOrder, UiMenuItem, UiTable, UiOpenOrder } from '@/types/api';
 
 function getOrderColor(order: UiOrder | null): 'none' | 'open' | 'paid' {
   if (!order) return 'none';
@@ -33,11 +44,15 @@ interface OrderPanelProps {
   tableName: string | null;
   categories: UiCategoryOption[];
   menuItems: UiMenuItem[];
+  tables?: UiTable[];
+  orders?: UiOpenOrder[];
   onAddItem: (item: UiMenuItem) => void;
   onIncrement: (itemId: string) => void;
   onDecrement: (itemId: string) => void;
   onRemove: (itemId: string) => void;
   onCloseOrder?: (method: 'cash' | 'card') => void;
+  onDeleteBill?: () => Promise<void>;
+  onTransferOrder?: (targetTableId: string) => Promise<void>;
   onSuccess?: (message: string) => void;
   onError?: (message: string) => void;
 }
@@ -49,16 +64,23 @@ export function OrderPanel({
   tableName,
   categories,
   menuItems,
+  tables = [],
+  orders = [],
   onAddItem,
   onIncrement,
   onDecrement,
   onRemove,
   onCloseOrder,
+  onDeleteBill,
+  onTransferOrder,
   onSuccess,
   onError,
 }: OrderPanelProps) {
   const [pendingMethod, setPendingMethod] = useState<'cash' | 'card' | null>(null);
   const [mobileTab, setMobileTab] = useState<'order' | 'menu'>('order');
+  const [voidDialogOpen, setVoidDialogOpen] = useState(false);
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const baselineRef = useRef<Map<string, number>>(new Map());
 
   const colorState = getOrderColor(order);
   const isPending = pendingMethod !== null;
@@ -73,6 +95,22 @@ export function OrderPanel({
     motionTotal.set(order?.total ?? 0);
   }, [order?.total, motionTotal]);
 
+  useEffect(() => {
+    if (open && order && baselineRef.current.size === 0) {
+      const baseline = new Map<string, number>();
+      for (const item of order.items) {
+        const key = `${item.menuItemId}::${item.note ?? ''}`;
+        const existing = baseline.get(key) ?? 0;
+        baseline.set(key, existing + item.quantity);
+      }
+      baselineRef.current = baseline;
+    }
+
+    if (!open) {
+      baselineRef.current = new Map();
+    }
+  }, [open, order]);
+
   async function handleClose(method: 'cash' | 'card') {
     setPendingMethod(method);
     try {
@@ -84,6 +122,15 @@ export function OrderPanel({
       onError?.('Hesap kapatılamadı');
     } finally {
       setPendingMethod(null);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    setVoidDialogOpen(false);
+    try {
+      await onDeleteBill?.();
+    } catch {
+      // errors handled by parent
     }
   }
 
@@ -170,7 +217,7 @@ export function OrderPanel({
           {/* LEFT: order items */}
           <div
             className={cn(
-              'flex flex-1 flex-col overflow-hidden bg-background',
+              'flex flex-1 flex-col overflow-hidden',
               'hidden sm:flex',
               mobileTab === 'order' && '!flex'
             )}
@@ -185,16 +232,21 @@ export function OrderPanel({
               <div className="flex flex-col">
                 <AnimatePresence initial={false}>
                   {(order?.items ?? []).length > 0 ? (
-                    order!.items.map((item, index) => (
-                      <OrderItemRow
-                        key={`${item.menuItemId}::${(item.note ?? '').trim()}`}
-                        item={item}
-                        delay={index * 0.04}
-                        onIncrement={onIncrement}
-                        onDecrement={onDecrement}
-                        onRemove={onRemove}
-                      />
-                    ))
+                    order!.items.map((item, index) => {
+                      const itemKey = `${item.menuItemId}::${item.note ?? ''}`;
+                      const baselineQty = baselineRef.current.get(itemKey) ?? item.quantity;
+                      return (
+                        <OrderItemRow
+                          key={`${item.menuItemId}::${(item.note ?? '').trim()}`}
+                          item={item}
+                          delay={index * 0.04}
+                          baselineQuantity={baselineQty}
+                          onIncrement={onIncrement}
+                          onDecrement={onDecrement}
+                          onRemove={onRemove}
+                        />
+                      );
+                    })
                   ) : (
                     <motion.div
                       key="empty"
@@ -216,7 +268,7 @@ export function OrderPanel({
           {/* RIGHT: embedded MenuSelector */}
           <div
             className={cn(
-              'flex w-full flex-col overflow-hidden bg-background sm:w-72 sm:shrink-0',
+              'flex w-full flex-col overflow-hidden sm:w-96 sm:shrink-0',
               'hidden sm:flex',
               mobileTab === 'menu' && '!flex'
             )}
@@ -234,8 +286,8 @@ export function OrderPanel({
         </div>
 
         {/* FOOTER */}
-        <div className="flex shrink-0 flex-col gap-3 border-t border-border bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-5 sm:py-4">
-          <div className="flex flex-1 items-baseline gap-2">
+        <div className="flex shrink-0 items-start border-t border-border bg-muted/30 py-3 sm:py-4">
+          <div className="flex flex-1 items-baseline gap-2 pt-1 px-4 sm:px-5">
             <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
               Toplam
             </span>
@@ -248,31 +300,87 @@ export function OrderPanel({
           </div>
 
           <RoleGate allowed={['soprano_admin']}>
-            <div className="flex items-center gap-2">
-              <Button
-                disabled={isClosedOrEmpty || isPending}
-                onClick={() => void handleClose('cash')}
-                variant="outline"
-                className="h-10 flex-1 rounded-xl px-3 sm:flex-none sm:px-5"
-              >
-                {pendingMethod === 'cash' ? (
-                  <Loader2 className="animate-spin" strokeWidth={1.5} size={14} />
-                ) : null}
-                Nakit Kapat
-              </Button>
-              <Button
-                disabled={isClosedOrEmpty || isPending}
-                onClick={() => void handleClose('card')}
-                className="h-10 flex-1 rounded-xl bg-foreground px-3 text-background hover:bg-foreground/90 sm:flex-none sm:px-5"
-              >
-                {pendingMethod === 'card' ? (
-                  <Loader2 className="animate-spin" strokeWidth={1.5} size={14} />
-                ) : null}
-                Kredi Kartı Kapat
-              </Button>
+            <div className="flex flex-col gap-1.5 sm:w-96 sm:shrink-0 pr-4 sm:pr-5">
+              <div className="flex items-center gap-2">
+                <Button
+                  disabled={isClosedOrEmpty || isPending}
+                  onClick={() => void handleClose('cash')}
+                  variant="outline"
+                  className="h-10 flex-1 rounded-xl px-3"
+                >
+                  {pendingMethod === 'cash' ? (
+                    <Loader2 className="animate-spin" strokeWidth={1.5} size={14} />
+                  ) : null}
+                  Nakit Kapat
+                </Button>
+                <Button
+                  disabled={isClosedOrEmpty || isPending}
+                  onClick={() => void handleClose('card')}
+                  className="h-10 flex-1 rounded-xl bg-foreground px-3 text-background hover:bg-foreground/90"
+                >
+                  {pendingMethod === 'card' ? (
+                    <Loader2 className="animate-spin" strokeWidth={1.5} size={14} />
+                  ) : null}
+                  Kredi Kartı Kapat
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  disabled={isClosedOrEmpty}
+                  onClick={() => setVoidDialogOpen(true)}
+                  variant="outline"
+                  className="h-10 flex-1 rounded-xl border-red-500/30 px-3 text-red-600 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-600 dark:text-red-400"
+                >
+                  Hesabı Sil
+                </Button>
+                <Button
+                  disabled={isClosedOrEmpty}
+                  onClick={() => setTransferDialogOpen(true)}
+                  variant="outline"
+                  className="h-10 flex-1 rounded-xl border-blue-500/30 px-3 text-blue-600 hover:border-blue-500/50 hover:bg-blue-500/10 hover:text-blue-600 dark:text-blue-400"
+                >
+                  Masa Transfer Et
+                </Button>
+              </div>
             </div>
           </RoleGate>
         </div>
+
+        {/* Delete bill confirmation dialog */}
+        <AlertDialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Hesabı Sil</AlertDialogTitle>
+              <AlertDialogDescription>
+                Bu hesabı silmek istediğinizden emin misiniz? Hesap arşivlenecek ve masa serbest bırakılacak.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>İptal</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => void handleDeleteConfirm()}
+                className="bg-red-600 text-white hover:bg-red-700"
+              >
+                Evet, Sil
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Transfer table dialog */}
+        {order && (
+          <TransferTableDialog
+            open={transferDialogOpen}
+            onOpenChange={setTransferDialogOpen}
+            sourceTableName={tableName ?? ''}
+            tables={tables}
+            orders={orders}
+            currentTableId={order.tableId}
+            onTransfer={async (targetTableId) => {
+              await onTransferOrder?.(targetTableId);
+            }}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
